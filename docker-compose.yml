@@ -4,6 +4,8 @@ services:
   sendrecv-gst:
     build: ./sendrecv/gst
     network_mode: host
+    environment:
+      - GST_DEBUG=1
   sendrecv-js:
     build: ./sendrecv/js
     ports:

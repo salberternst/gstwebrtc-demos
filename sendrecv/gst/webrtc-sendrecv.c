@@ -101,90 +101,6 @@ get_string_from_json_object (JsonObject * object)
   return text;
 }
 
-static void
-handle_media_stream (GstPad * pad, GstElement * pipe, const char * convert_name,
-    const char * sink_name)
-{
-  GstPad *qpad;
-  GstElement *q, *conv, *resample, *sink;
-  GstPadLinkReturn ret;
-
-  g_print ("Trying to handle stream with %s ! %s", convert_name, sink_name);
-
-  q = gst_element_factory_make ("queue", NULL);
-  g_assert_nonnull (q);
-  conv = gst_element_factory_make (convert_name, NULL);
-  g_assert_nonnull (conv);
-  sink = gst_element_factory_make (sink_name, NULL);
-  g_assert_nonnull (sink);
-
-  if (g_strcmp0 (convert_name, "audioconvert") == 0) {
-    /* Might also need to resample, so add it just in case.
-     * Will be a no-op if it's not required. */
-    resample = gst_element_factory_make ("audioresample", NULL);
-    g_assert_nonnull (resample);
-    gst_bin_add_many (GST_BIN (pipe), q, conv, resample, sink, NULL);
-    gst_element_sync_state_with_parent (q);
-    gst_element_sync_state_with_parent (conv);
-    gst_element_sync_state_with_parent (resample);
-    gst_element_sync_state_with_parent (sink);
-    gst_element_link_many (q, conv, resample, sink, NULL);
-  } else {
-    gst_bin_add_many (GST_BIN (pipe), q, conv, sink, NULL);
-    gst_element_sync_state_with_parent (q);
-    gst_element_sync_state_with_parent (conv);
-    gst_element_sync_state_with_parent (sink);
-    gst_element_link_many (q, conv, sink, NULL);
-  }
-
-  qpad = gst_element_get_static_pad (q, "sink");
-
-  ret = gst_pad_link (pad, qpad);
-  g_assert_cmphex (ret, ==, GST_PAD_LINK_OK);
-}
-
-static void
-on_incoming_decodebin_stream (GstElement * decodebin, GstPad * pad,
-    GstElement * pipe)
-{
-  GstCaps *caps;
-  const gchar *name;
-
-  if (!gst_pad_has_current_caps (pad)) {
-    g_printerr ("Pad '%s' has no caps, can't do anything, ignoring\n",
-        GST_PAD_NAME (pad));
-    return;
-  }
-
-  caps = gst_pad_get_current_caps (pad);
-  name = gst_structure_get_name (gst_caps_get_structure (caps, 0));
-
-  if (g_str_has_prefix (name, "video")) {
-    handle_media_stream (pad, pipe, "videoconvert", "autovideosink");
-  } else if (g_str_has_prefix (name, "audio")) {
-    handle_media_stream (pad, pipe, "audioconvert", "autoaudiosink");
-  } else {
-    g_printerr ("Unknown pad %s, ignoring", GST_PAD_NAME (pad));
-  }
-}
-
-static void
-on_incoming_stream (GstElement * webrtc, GstPad * pad, GstElement * pipe)
-{
-  GstElement *decodebin;
-
-  // if (GST_PAD_DIRECTION (pad) != GST_PAD_SRC)
-  //   return;
-
-    g_print ("on_incoming_stream\n");
-
-  decodebin = gst_element_factory_make ("decodebin", NULL);
-  g_signal_connect (decodebin, "pad-added",
-      G_CALLBACK (on_incoming_decodebin_stream), pipe);
-  gst_bin_add (GST_BIN (pipe), decodebin);
-  gst_element_sync_state_with_parent (decodebin);
-  gst_element_link (webrtc, decodebin);
-}
 
 static void
 send_ice_candidate_message (GstElement * webrtc G_GNUC_UNUSED, guint mlineindex,
@@ -275,6 +191,13 @@ on_answer_created (GstPromise * promise, gpointer user_data)
 #define RTP_CAPS_OPUS "application/x-rtp,media=audio,encoding-name=OPUS,payload="
 #define RTP_CAPS_VP8 "application/x-rtp,media=video,encoding-name=VP8,payload="
 
+
+static void
+on_incoming_stream (GstElement * webrtc, GstPad * new_pad, GstElement * pipe)
+{
+   g_print ("on incoming stream\n");
+}
+
 static gboolean
 start_pipeline (void)
 {
@@ -282,9 +205,8 @@ start_pipeline (void)
   GError *error = NULL;
 
   pipe1 =
-      gst_parse_launch ("webrtcbin name=sendrecv "
-      "videotestsrc ! videoconvert ! queue ! vp8enc deadline=1 ! rtpvp8pay ! "
-      "queue ! " RTP_CAPS_VP8 "97 ! sendrecv. ",
+      gst_parse_launch ("videotestsrc is-live=true pattern=ball ! videoconvert ! queue ! vp8enc deadline=1 ! rtpvp8pay ! "
+      "queue ! " RTP_CAPS_VP8 "96 ! webrtcbin bundle-policy=max-bundle name=sendonly ",
       &error);
   if (error) {
     g_printerr ("Failed to parse launch: %s\n", error->message);
@@ -292,7 +214,7 @@ start_pipeline (void)
     goto err;
   }
 
-  webrtc1 = gst_bin_get_by_name (GST_BIN (pipe1), "sendrecv");
+  webrtc1 = gst_bin_get_by_name (GST_BIN (pipe1), "sendonly");
   g_assert_nonnull (webrtc1);
 
   /* We need to transmit this ICE candidate to the browser via the websockets

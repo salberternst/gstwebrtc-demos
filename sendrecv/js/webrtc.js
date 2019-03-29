@@ -16,7 +16,7 @@ var default_peer_id = 2;
 var rtc_configuration = {iceServers: [{urls: "stun:stun.services.mozilla.com"},
                                       {urls: "stun:stun.l.google.com:19302"}]};
 // The default constraints that will be attempted. Can be overriden by the user.
-var default_constraints = {video: true, audio: true};
+var default_constraints = {video: false, audio: false};
 
 var connect_attempts = 0;
 var peer_connection;
@@ -84,13 +84,6 @@ function onLocalDescription(desc) {
     });
 }
 
-// ICE candidate received from peer, add it to the peer connection
-function onIncomingICE(ice) {
-    console.log(ice)
-    var candidate = new RTCIceCandidate(ice);
-    peer_connection.addIceCandidate(candidate).catch(setError);
-}
-
 let candidates = []
 let done = false
 
@@ -121,13 +114,18 @@ async function onServerMessage(event) {
             }
 
             if (msg.sdp != null) {
+                console.log(msg.sdp, msg)
                 const description = new RTCSessionDescription(msg.sdp)
                 peer_connection.setRemoteDescription(description)
                     .then(() => {
-                        console.log("setRemoteDescription: done")
+                        console.log("setRemoteDescription: done")                      
                         done = true
                     })
             } 
+
+            if(msg.ice) {
+                console.log(msg.ice)
+            }
 
             if(done) {
                 if(candidates.length > 0) {
@@ -226,7 +224,7 @@ function websocketServerConnect() {
 }
 
 function onRemoteStreamAdded(event) {
-    debugger;
+    debugger
     videoTracks = event.stream.getVideoTracks();
     audioTracks = event.stream.getAudioTracks();
 
@@ -242,29 +240,34 @@ function errorUserMediaHandler() {
     setError("Browser doesn't support getUserMedia!");
 }
 
-function onDataChannel(event) {
-    setStatus("Data channel created");
-    let receiveChannel = event.channel;
-    receiveChannel.onopen = handleDataChannelOpen;
-    receiveChannel.onmessage = handleDataChannelMessageReceived;
-    receiveChannel.onerror = handleDataChannelError;
-    receiveChannel.onclose = handleDataChannelClose;
-}
 
 function createCall() {
     // Reset connection attempts because we connected successfully
     connect_attempts = 0;
 
     peer_connection = new RTCPeerConnection(rtc_configuration);
-    peer_connection.ondatachannel = onDataChannel;
-    peer_connection.onaddstream = onRemoteStreamAdded;
 
-    local_stream_promise = getLocalStream().then((stream) => {
-        console.log('Adding local stream');
-        peer_connection.addStream(stream);
-        peer_connection.createOffer(onLocalDescription, error => console.error(error));
-        return stream;
-    }).catch(setError);
+
+    setInterval(() => {
+        console.log(peer_connection.signalingState)
+    }, 100)
+    
+    // peer_connection.ondatachannel = onDataChannel;
+    peer_connection.onaddstream = () => {
+        console.log("onAddStream")
+    }
+    peer_connection.addEventListener('track', onRemoteStreamAdded);
+    // local_stream_promise = getLocalStream().then((stream) => {
+    //     console.log('Adding local stream');
+    //     peer_connection.addStream(stream);
+     
+    //     return stream;
+    // }).catch(setError);
+    peer_connection.createOffer(onLocalDescription, error => console.error(error), { 
+        offerToReceiveAudio: 1,
+        offerToReceiveVideo: 1,
+    });
+    
 
     peer_connection.onicecandidate = (event) => {
         // We have a candidate, send it to the remote party with the
